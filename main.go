@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/TechBowl-japan/go-stations/db"
@@ -52,11 +56,34 @@ func realMain() error {
 	mux := router.NewRouter(todoDB)
 
 	// TODO: サーバーをlistenする
-	server := http.Server {
-		Addr: port,
+	server := http.Server{
+		Addr:    port,
 		Handler: mux,
+		// Handler: middleware.Recovery(mux),
 	}
-	server.ListenAndServe()
 
+	// チャネル作成
+	idleConnsClosed := make(chan struct{})
+	go func() {
+		// os.Signal型のチャネル作成
+		sigint := make(chan os.Signal, 1)
+		signal.Notify(sigint, os.Interrupt, syscall.SIGTERM)
+		<-sigint
+
+		if err := server.Shutdown(context.Background()); err != http.ErrServerClosed {
+			log.Fatalf("HTTP server shutdown %v", err)
+			close(idleConnsClosed)
+			return
+		}
+		log.Printf("Server is shut down")
+		close(idleConnsClosed)
+	}()
+
+	log.Printf("Server is running on %s", server.Addr)
+	if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		log.Fatalf("HTTP server error: %v", err)
+	}
+
+	<-idleConnsClosed
 	return nil
 }

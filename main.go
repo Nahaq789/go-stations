@@ -67,12 +67,16 @@ func realMain() error {
 	go func() {
 		// os.Signal型のチャネル作成
 		sigint := make(chan os.Signal, 1)
+		// osからのSIGINTとSIGTERMを受け取れるように設定
 		signal.Notify(sigint, os.Interrupt, syscall.SIGTERM)
+		// チャネルから値を受信
+		// 値を受信するまで処理ストップ
 		<-sigint
 
-		if err := server.Shutdown(context.Background()); err != http.ErrServerClosed {
-			log.Fatalf("HTTP server shutdown %v", err)
-			close(idleConnsClosed)
+		// チャネルから値を受信したら
+		// サーバーシャットダウン
+		if err := server.Shutdown(context.Background()); err != nil {
+			log.Printf("server shutdown error: %v", err)
 			return
 		}
 		log.Printf("Server is shut down")

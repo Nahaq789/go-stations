@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"syscall"
+	"sync"
 	"time"
 
 	"github.com/TechBowl-japan/go-stations/db"
@@ -62,32 +62,64 @@ func realMain() error {
 		// Handler: middleware.Recovery(mux),
 	}
 
-	// チャネル作成
-	idleConnsClosed := make(chan struct{})
-	go func() {
-		// os.Signal型のチャネル作成
-		sigint := make(chan os.Signal, 1)
-		// osからのSIGINTとSIGTERMを受け取れるように設定
-		signal.Notify(sigint, os.Interrupt, syscall.SIGTERM)
-		// チャネルから値を受信
-		// 値を受信するまで処理ストップ
-		<-sigint
+	var wg sync.WaitGroup
 
-		// チャネルから値を受信したら
-		// サーバーシャットダウン
-		if err := server.Shutdown(context.Background()); err != nil {
-			log.Printf("server shutdown error: %v", err)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	wg.Add(1)
+	go func(ctx context.Context) {
+		defer wg.Done()
+		<-ctx.Done()
+
+		fmt.Println("シグナル受信")
+
+		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(c); err != nil {
+			log.Printf("Server shutdown error: %v", err)
 			return
 		}
-		log.Printf("Server is shut down")
-		close(idleConnsClosed)
-	}()
+	}(ctx)
+	log.Println(server.ListenAndServe())
+	wg.Wait()
 
-	log.Printf("Server is running on %s", server.Addr)
-	if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("HTTP server error: %v", err)
-	}
-
-	<-idleConnsClosed
 	return nil
+
+	// チャネル作成
+	// シャットダウン時にgoroutineの関数より先に
+	// main関数が終了するの防ぐ
+	// idleConnsClosed := make(chan struct{})
+	// go func() {
+	// 	// os.Signal型のチャネル作成
+	// 	sigint := make(chan os.Signal, 1)
+	// 	// osからのSIGINTとSIGTERMを受け取れるように設定
+	// 	signal.Notify(sigint, os.Interrupt, syscall.SIGTERM)
+	// 	// チャネルから値を受信
+	// 	// 値を受信するまで処理ストップ
+	// 	<-sigint
+
+	// 	// シャットダウンしてから10秒間は継続する
+	// 	c, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// 	defer cancel()
+
+	// 	// チャネルから値を受信したら
+	// 	// サーバーシャットダウン
+	// 	if err := server.Shutdown(c); err != nil {
+	// 		log.Printf("Server shutdown error: %v", err)
+	// 		close(idleConnsClosed)
+	// 		return
+	// 	}
+
+	// 	log.Println("Server is shut down")
+	// 	// 正常終了時もチャネルを閉じる
+	// 	close(idleConnsClosed)
+	// }()
+
+	// log.Printf("Server is running on %s", server.Addr)
+	// if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+	// 	log.Fatalf("HTTP server error: %v", err)
+	// }
+
+	// <-idleConnsClosed
 }
